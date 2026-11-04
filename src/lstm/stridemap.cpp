@@ -66,7 +66,8 @@ int StrideMap::Index::MaxIndexOfDim(FlexDimensions dim) const {
 // makes a valid index.
 bool StrideMap::Index::AddOffset(int offset, FlexDimensions dimension) {
   indices_[dimension] += offset;
-  SetTFromIndices();
+  // Only one coordinate changed, so its precomputed stride is sufficient.
+  t_ += offset * stride_map_->t_increments_[dimension];
   return IsValid();
 }
 

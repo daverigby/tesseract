@@ -60,6 +60,33 @@ protected:
 #endif
 };
 
+TEST_F(StridemapTest, OffsetKeepsFlatIndexInSync) {
+  StrideMap stride_map;
+  stride_map.SetStride({{2, 3}, {3, 2}});
+  for (int batch = 0; batch < 2; ++batch) {
+    for (int y = 0; y < (batch == 0 ? 2 : 3); ++y) {
+      for (int x = 0; x < (batch == 0 ? 3 : 2); ++x) {
+        for (int dim = FD_BATCH; dim < FD_DIMSIZE; ++dim) {
+          for (int offset : {-4, -1, 0, 1, 4}) {
+            StrideMap::Index index(stride_map, batch, y, x);
+            int coords[] = {batch, y, x};
+            coords[dim] += offset;
+            StrideMap::Index recomputed(stride_map, coords[FD_BATCH], coords[FD_HEIGHT],
+                                        coords[FD_WIDTH]);
+            EXPECT_EQ(index.AddOffset(offset, static_cast<FlexDimensions>(dim)),
+                      recomputed.IsValid());
+            EXPECT_EQ(index.t(), recomputed.t());
+            EXPECT_EQ(index.index(static_cast<FlexDimensions>(dim)), coords[dim]);
+            index.AddOffset(-offset, static_cast<FlexDimensions>(dim));
+            EXPECT_TRUE(index.IsValid());
+            EXPECT_EQ(index.t(), StrideMap::Index(stride_map, batch, y, x).t());
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST_F(StridemapTest, Indexing) {
   // This test verifies that with a batch of arrays of different sizes, the
   // iteration index each of them in turn, without going out of bounds.
