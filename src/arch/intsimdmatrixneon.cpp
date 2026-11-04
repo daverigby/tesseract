@@ -45,6 +45,12 @@ constexpr int kNumInputsPerGroup = 8;
 // The amount of w and scales consumed is fixed and not available to the
 // caller.
 
+// Reduce four 32-bit partial sums once per output row after the input loop.
+static inline int32_t HorizontalSum32x4(int32x4_t values) {
+  const int32x2_t pair = vadd_s32(vget_low_s32(values), vget_high_s32(values));
+  return vget_lane_s32(vpadd_s32(pair, pair), 0);
+}
+
 // Computes part of matrix.vector v = Wu. Computes N=8 results.
 // The weights *must* be arranged so that consecutive reads from wi
 // provides (num_in/kNumInputsPerGroup groups of (N output dim groups of
@@ -57,8 +63,14 @@ static inline void PartialMatrixDotVector8(const int8_t *__restrict wi,
                                            const int8_t *__restrict u, int num_in,
                                            TFloat *__restrict v, int num_out) {
   // Initialize all the results to 0.
-  int32x4_t result0123 = {0, 0, 0, 0};
-  int32x4_t result4567 = {0, 0, 0, 0};
+  int32x4_t sum0 = vdupq_n_s32(0);
+  int32x4_t sum1 = vdupq_n_s32(0);
+  int32x4_t sum2 = vdupq_n_s32(0);
+  int32x4_t sum3 = vdupq_n_s32(0);
+  int32x4_t sum4 = vdupq_n_s32(0);
+  int32x4_t sum5 = vdupq_n_s32(0);
+  int32x4_t sum6 = vdupq_n_s32(0);
+  int32x4_t sum7 = vdupq_n_s32(0);
   int8x8_t bias_scale = {127, 127, 127, 127, 127, 127, 127, 127};
   // Iterate over the input (u), one registerful at a time.
   for (int j = 0; j < num_in; j += 8) {
@@ -93,54 +105,21 @@ static inline void PartialMatrixDotVector8(const int8_t *__restrict wi,
                                 vu); // vrow7q = vw70.u0 w71.u1 w72.u2 w73.u3
                                      // vw74.u4 w75.u5 w76.u6 w77.u7
 
-    int32x4_t vrow0q2 = vpaddlq_s16(vrow0q); // vrow0q2 = vw00.u0+w01.u1 w02.u2+w03.u3
-                                             // vw04.u4+w05.u5 w06.u6+w07.u7
-    int32x4_t vrow1q2 = vpaddlq_s16(vrow1q); // vrow1q2 = vw10.u0+w11.u1 w12.u2+w13.u3
-                                             // vw14.u4+w15.u5 w16.u6+w17.u7
-    int32x4_t vrow2q2 = vpaddlq_s16(vrow2q); // vrow2q2 = vw20.u0+w21.u1 w22.u2+w23.u3
-                                             // vw24.u4+w25.u5 w26.u6+w27.u7
-    int32x4_t vrow3q2 = vpaddlq_s16(vrow3q); // vrow3q2 = vw30.u0+w31.u1 w32.u2+w33.u3
-                                             // vw34.u4+w35.u5 w36.u6+w37.u7
-    int32x4_t vrow4q2 = vpaddlq_s16(vrow4q); // vrow4q2 = vw40.u0+w41.u1 w42.u2+w43.u3
-                                             // vw44.u4+w45.u5 w46.u6+w47.u7
-    int32x4_t vrow5q2 = vpaddlq_s16(vrow5q); // vrow5q2 = vw50.u0+w51.u1 w52.u2+w53.u3
-                                             // vw54.u4+w55.u5 w56.u6+w57.u7
-    int32x4_t vrow6q2 = vpaddlq_s16(vrow6q); // vrow6q2 = vw60.u0+w61.u1 w62.u2+w63.u3
-                                             // vw64.u4+w65.u5 w66.u6+w67.u7
-    int32x4_t vrow7q2 = vpaddlq_s16(vrow7q); // vrow7q2 = vw70.u0+w71.u1 w72.u2+w73.u3
-                                             // vw74.u4+w75.u5 w76.u6+w77.u7
-
-    vrow0q2 = vcombine_s32(vpadd_s32(vget_low_s32(vrow0q2), vget_high_s32(vrow0q2)),
-                           vpadd_s32(vget_low_s32(vrow1q2), vget_high_s32(vrow1q2)));
-    // vrow0q2 = vw00.u0+...+w03.u3 vw04.u4+...+w07.u7 vw10.u0+...+w13.u3
-    // vw14.u4+...+w17.u7
-    vrow2q2 = vcombine_s32(vpadd_s32(vget_low_s32(vrow2q2), vget_high_s32(vrow2q2)),
-                           vpadd_s32(vget_low_s32(vrow3q2), vget_high_s32(vrow3q2)));
-    // vrow0q2 = vw20.u0+...+w23.u3 vw24.u4+...+w27.u7 vw30.u0+...+w33.u3
-    // vw34.u4+...+w37.u7
-    vrow4q2 = vcombine_s32(vpadd_s32(vget_low_s32(vrow4q2), vget_high_s32(vrow4q2)),
-                           vpadd_s32(vget_low_s32(vrow5q2), vget_high_s32(vrow5q2)));
-    // vrow0q2 = vw40.u0+...+w43.u3 vw44.u4+...+w47.u7 vw50.u0+...+w53.u3
-    // vw54.u4+...+w57.u7
-    vrow6q2 = vcombine_s32(vpadd_s32(vget_low_s32(vrow6q2), vget_high_s32(vrow6q2)),
-                           vpadd_s32(vget_low_s32(vrow7q2), vget_high_s32(vrow7q2)));
-    // vrow0q2 = vw60.u0+...+w63.u3 vw64.u4+...+w67.u7 vw70.u0+...+w73.u3
-    // vw74.u4+...+w77.u7
-
-    vrow0q2 = vcombine_s32(vpadd_s32(vget_low_s32(vrow0q2), vget_high_s32(vrow0q2)),
-                           vpadd_s32(vget_low_s32(vrow2q2), vget_high_s32(vrow2q2)));
-    // vrow0q2 = vw00.u0+...+w07.u7 vw10.u0+...+w17.u7 vw20.u0+...+w27.u7
-    // vw30.u0+...+w37.u7
-    vrow4q2 = vcombine_s32(vpadd_s32(vget_low_s32(vrow4q2), vget_high_s32(vrow4q2)),
-                           vpadd_s32(vget_low_s32(vrow6q2), vget_high_s32(vrow6q2)));
-    // vrow0q2 = vw40.u0+...+w47.u7 vw50.u0+...+w57.u7 vw60.u0+...+w67.u7
-    // vw70.u0+...+w77.u7
-
-    result0123 = vaddq_s32(result0123, vrow0q2);
-    result4567 = vaddq_s32(result4567, vrow4q2);
+    sum0 = vpadalq_s16(sum0, vrow0q);
+    sum1 = vpadalq_s16(sum1, vrow1q);
+    sum2 = vpadalq_s16(sum2, vrow2q);
+    sum3 = vpadalq_s16(sum3, vrow3q);
+    sum4 = vpadalq_s16(sum4, vrow4q);
+    sum5 = vpadalq_s16(sum5, vrow5q);
+    sum6 = vpadalq_s16(sum6, vrow6q);
+    sum7 = vpadalq_s16(sum7, vrow7q);
     u += 8;
     wi += 64;
   }
+  int32x4_t result0123 = {HorizontalSum32x4(sum0), HorizontalSum32x4(sum1),
+                           HorizontalSum32x4(sum2), HorizontalSum32x4(sum3)};
+  int32x4_t result4567 = {HorizontalSum32x4(sum4), HorizontalSum32x4(sum5),
+                           HorizontalSum32x4(sum6), HorizontalSum32x4(sum7)};
   {
     int8x8_t bias = vld1_s8(wi); // vw0    = b0  b1  b2  b3  b4  b5  b6  b7
     int16x8_t scaled_bias = vmull_s8(bias, bias_scale);
